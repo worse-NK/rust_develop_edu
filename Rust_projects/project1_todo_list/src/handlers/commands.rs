@@ -1,8 +1,8 @@
 use teloxide::{prelude::*, utils::command::BotCommands};
 
 use crate::models::{UserState, UserStates};
-use crate::storage::MemoryStorage;
-use crate::utils::create_main_menu;
+use crate::storage::JsonStorage;
+use crate::utils::{create_main_menu, create_todo_menu};
 
 #[derive(BotCommands, Clone)]
 #[command(rename_rule = "lowercase", description = "Доступные команды:")]
@@ -21,13 +21,15 @@ pub enum Command {
     Remove(String),
     #[command(description = "очистить все задачи")]
     Clear,
+    #[command(description = "тестировать напоминания (только для разработки)")]
+    TestReminders,
 }
 
 pub async fn handle_command(
     bot: Bot,
     msg: Message,
     command: Command,
-    storage: MemoryStorage,
+    storage: JsonStorage,
     user_states: UserStates,
 ) -> ResponseResult<()> {
     // Сброс состояния пользователя при любой команде
@@ -65,14 +67,20 @@ pub async fn handle_command(
         Command::Add(task_text) => {
             if task_text.trim().is_empty() {
                 bot.send_message(msg.chat.id, "Пожалуйста, укажите текст задачи. Пример: /add Купить молоко")
-                    .reply_markup(create_main_menu())
+                    .reply_markup(create_todo_menu())
                     .await?;
                 return Ok(());
             }
 
-            storage.add_task(msg.chat.id, task_text.trim()).await;
+            if let Err(_) = storage.add_task(msg.chat.id, task_text.trim()).await {
+                bot.send_message(msg.chat.id, "❌ Ошибка при добавлении задачи")
+                    .reply_markup(create_todo_menu())
+                    .await?;
+                return Ok(());
+            }
+            
             bot.send_message(msg.chat.id, format!("✅ Задача добавлена: {}", task_text.trim()))
-                .reply_markup(create_main_menu())
+                .reply_markup(create_todo_menu())
                 .await?;
         }
         Command::List => {
@@ -85,11 +93,11 @@ pub async fn handle_command(
                     response.push_str(&format!("{}. {} {}\n", index + 1, status, todo.text));
                 }
                 bot.send_message(msg.chat.id, response)
-                    .reply_markup(create_main_menu())
+                    .reply_markup(create_todo_menu())
                     .await?;
             } else {
                 bot.send_message(msg.chat.id, "📝 У вас пока нет задач.")
-                    .reply_markup(create_main_menu())
+                    .reply_markup(create_todo_menu())
                     .await?;
             }
         }
@@ -98,7 +106,7 @@ pub async fn handle_command(
                 Ok(num) if num > 0 => num - 1,
                 _ => {
                     bot.send_message(msg.chat.id, "Пожалуйста, укажите корректный номер задачи. Пример: /done 1")
-                        .reply_markup(create_main_menu())
+                        .reply_markup(create_todo_menu())
                         .await?;
                     return Ok(());
                 }
@@ -107,12 +115,12 @@ pub async fn handle_command(
             match storage.mark_task_completed(msg.chat.id, task_index).await {
                 Ok(task_text) => {
                     bot.send_message(msg.chat.id, format!("✅ Задача \"{}\" отмечена как выполненная!", task_text))
-                        .reply_markup(create_main_menu())
+                        .reply_markup(create_todo_menu())
                         .await?;
                 }
                 Err(error) => {
                     bot.send_message(msg.chat.id, format!("❌ {}", error))
-                        .reply_markup(create_main_menu())
+                        .reply_markup(create_todo_menu())
                         .await?;
                 }
             }
@@ -122,7 +130,7 @@ pub async fn handle_command(
                 Ok(num) if num > 0 => num - 1,
                 _ => {
                     bot.send_message(msg.chat.id, "Пожалуйста, укажите корректный номер задачи. Пример: /remove 1")
-                        .reply_markup(create_main_menu())
+                        .reply_markup(create_todo_menu())
                         .await?;
                     return Ok(());
                 }
@@ -131,19 +139,31 @@ pub async fn handle_command(
             match storage.remove_task(msg.chat.id, task_index).await {
                 Ok(task_text) => {
                     bot.send_message(msg.chat.id, format!("🗑️ Задача \"{}\" удалена", task_text))
-                        .reply_markup(create_main_menu())
+                        .reply_markup(create_todo_menu())
                         .await?;
                 }
                 Err(error) => {
                     bot.send_message(msg.chat.id, format!("❌ {}", error))
-                        .reply_markup(create_main_menu())
+                        .reply_markup(create_todo_menu())
                         .await?;
                 }
             }
         }
         Command::Clear => {
-            storage.clear_tasks(msg.chat.id).await;
+            if let Err(_) = storage.clear_tasks(msg.chat.id).await {
+                bot.send_message(msg.chat.id, "❌ Ошибка при очистке задач")
+                    .reply_markup(create_todo_menu())
+                    .await?;
+                return Ok(());
+            }
+            
             bot.send_message(msg.chat.id, "🧹 Все задачи очищены")
+                .reply_markup(create_todo_menu())
+                .await?;
+        }
+        Command::TestReminders => {
+            // Эта команда только для тестирования
+            bot.send_message(msg.chat.id, "🧪 Команда для тестирования напоминаний доступна только разработчику")
                 .reply_markup(create_main_menu())
                 .await?;
         }

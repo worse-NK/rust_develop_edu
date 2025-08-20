@@ -1,0 +1,19 @@
+services:
+  telegram-todo-bot:
+    build: .
+    container_name: telegram_todo_bot
+    restart: unless-stopped
+    environment:
+      - TELOXIDE_TOKEN=${TELOXIDE_TOKEN}
+      - RUST_LOG=info
+    volumes:
+      # Монтируем директорию для данных
+      - ./data:/app/data
+      # Монтируем логи (опционально)
+      - ./logs:/app/logs
+    # Настройки для логирования
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"

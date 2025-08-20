@@ -9,6 +9,9 @@ pub enum UserState {
     WaitingForTask,
     WaitingForTaskList,
     WaitingForTaskNumber,
+    WaitingForRemovalNumber,
+    WaitingForWaterPeriod,
+    WaitingForElectricityPeriod,
 }
 
 impl Default for UserState {

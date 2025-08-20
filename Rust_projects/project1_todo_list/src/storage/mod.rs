@@ -1,3 +1,6 @@
+pub mod json;
+
+#[allow(dead_code)]
 pub mod memory;
 
-pub use memory::MemoryStorage;
+pub use json::JsonStorage;

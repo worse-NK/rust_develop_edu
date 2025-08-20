@@ -1,0 +1,36 @@
+# Git
+.git
+.gitignore
+
+# Docker
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# Rust
+target/
+Cargo.lock
+
+# Environment
+.env
+.env.local
+
+# Data
+data/
+logs/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Documentation
+README.md
+SECURITY.md
+
+# Scripts
+setup.sh
+.env.example
