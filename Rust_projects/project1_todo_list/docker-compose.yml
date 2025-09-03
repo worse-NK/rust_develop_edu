@@ -1,4 +1,22 @@
 services:
+  postgres:
+    image: postgres:15
+    container_name: telegram_bot_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: telegram_bot
+      POSTGRES_USER: bot_user
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-your_password}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bot_user -d telegram_bot"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   telegram-todo-bot:
     build: .
     container_name: telegram_todo_bot
@@ -6,14 +24,37 @@ services:
     environment:
       - TELOXIDE_TOKEN=${TELOXIDE_TOKEN}
       - RUST_LOG=info
+      - DATABASE_URL=postgresql://bot_user:${POSTGRES_PASSWORD}@postgres:5432/telegram_bot
+      - STORAGE_TYPE=${STORAGE_TYPE:-postgres}
     volumes:
-      # Монтируем директорию для данных
+      # Монтируем директорию для данных (для JSON fallback)
       - ./data:/app/data
       # Монтируем логи (опционально)
       - ./logs:/app/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
     # Настройки для логирования
     logging:
       driver: "json-file"
       options:
         max-size: "10m"
         max-file: "3"
+
+  pgadmin:
+    image: dpage/pgadmin4
+    container_name: telegram_bot_pgadmin
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@example.com
+      PGADMIN_DEFAULT_PASSWORD: admin123
+    ports:
+      - "5050:80"
+    depends_on:
+      - postgres
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+
+volumes:
+  postgres_data:
+  pgadmin_data:

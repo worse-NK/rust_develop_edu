@@ -4,16 +4,16 @@ use chrono_tz::Europe::Moscow;
 use teloxide::prelude::*;
 use tokio::time::interval;
 
-use crate::storage::JsonStorage;
+use crate::storage::StorageType;
 use crate::utils::create_reminder_response_keyboard;
 
 pub struct ReminderSystem {
     bot: Bot,
-    storage: JsonStorage,
+    storage: StorageType,
 }
 
 impl ReminderSystem {
-    pub fn new(bot: Bot, storage: JsonStorage) -> Self {
+    pub fn new(bot: Bot, storage: StorageType) -> Self {
         Self { bot, storage }
     }
 

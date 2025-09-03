@@ -1,13 +1,13 @@
 use teloxide::prelude::*;
 
 use crate::models::{UserState, UserStates, CounterType, CounterReminder};
-use crate::storage::JsonStorage;
-use crate::utils::{create_main_menu, create_todo_menu, create_reminder_menu, parse_task_list};
+use crate::storage::StorageType;
+use crate::utils::{create_main_menu, create_todo_menu, create_reminder_menu, parse_task_list, TaskValidator, TaskIndexValidator, DayValidator, ChatIdValidator, ValidationResult};
 
 pub async fn handle_text_message(
     bot: Bot,
     msg: Message,
-    storage: JsonStorage,
+    storage: StorageType,
     user_states: UserStates,
 ) -> ResponseResult<()> {
     let text = match msg.text() {
@@ -15,9 +15,24 @@ pub async fn handle_text_message(
         None => return Ok(()),
     };
 
-    // Проверка на безопасность - ограничение длины сообщения
-    if text.len() > 4000 {
-        bot.send_message(msg.chat.id, "❌ Сообщение слишком длинное. Максимум 4000 символов.")
+    // Валидация Chat ID
+    if let ValidationResult::Invalid(error_msg) = ChatIdValidator::validate_chat_id(msg.chat.id.0) {
+        log::warn!("Invalid chat ID: {} - {}", msg.chat.id.0, error_msg);
+        return Ok(());
+    }
+
+    // Создаем валидатор задач
+    let task_validator = match TaskValidator::new() {
+        Ok(validator) => validator,
+        Err(e) => {
+            log::error!("Failed to create task validator: {}", e);
+            return Ok(());
+        }
+    };
+
+    // Валидация сообщения
+    if let ValidationResult::Invalid(error_msg) = task_validator.validate_message(text) {
+        bot.send_message(msg.chat.id, format!("❌ {}", error_msg))
             .reply_markup(create_todo_menu())
             .await?;
         return Ok(());
@@ -36,22 +51,35 @@ pub async fn handle_text_message(
                 return Ok(());
             }
 
-            if let Err(_) = storage.add_task(msg.chat.id, text).await {
-                bot.send_message(msg.chat.id, "❌ Ошибка при добавлении задачи")
-                    .reply_markup(create_todo_menu())
-                    .await?;
-                return Ok(());
-            }
-            
-            // Сброс состояния
-            {
-                let mut states = user_states.lock().await;
-                states.insert(msg.chat.id, UserState::Default);
-            }
+            // Валидация текста задачи
+            match task_validator.validate_task_text(text) {
+                ValidationResult::Valid => {
+                    // Санитизируем текст перед сохранением
+                    let sanitized_text = task_validator.sanitize_task_text(text);
+                    
+                    if let Err(_) = storage.add_task(msg.chat.id, &sanitized_text).await {
+                        bot.send_message(msg.chat.id, "❌ Ошибка при добавлении задачи")
+                            .reply_markup(create_todo_menu())
+                            .await?;
+                        return Ok(());
+                    }
+                    
+                    // Сброс состояния
+                    {
+                        let mut states = user_states.lock().await;
+                        states.insert(msg.chat.id, UserState::Default);
+                    }
 
-            bot.send_message(msg.chat.id, format!("✅ Задача добавлена: {}", text))
-                .reply_markup(create_todo_menu())
-                .await?;
+                    bot.send_message(msg.chat.id, format!("✅ Задача добавлена: {}", sanitized_text))
+                        .reply_markup(create_todo_menu())
+                        .await?;
+                }
+                ValidationResult::Invalid(error_msg) => {
+                    bot.send_message(msg.chat.id, format!("❌ {}", error_msg))
+                        .await?;
+                    return Ok(());
+                }
+            }
         }
         UserState::WaitingForTaskList => {
             if text.is_empty() {
@@ -68,9 +96,21 @@ pub async fn handle_text_message(
             }
 
             let mut added_count = 0;
+            let mut valid_tasks = Vec::new();
+            
+            // Валидируем каждую задачу
             for task in &tasks {
-                if let Ok(_) = storage.add_task(msg.chat.id, task).await {
-                    added_count += 1;
+                match task_validator.validate_task_text(task) {
+                    ValidationResult::Valid => {
+                        let sanitized_task = task_validator.sanitize_task_text(task);
+                        if let Ok(_) = storage.add_task(msg.chat.id, &sanitized_task).await {
+                            added_count += 1;
+                            valid_tasks.push(sanitized_task);
+                        }
+                    }
+                    ValidationResult::Invalid(error_msg) => {
+                        log::warn!("Invalid task from user {}: {} - {}", msg.chat.id.0, task, error_msg);
+                    }
                 }
             }
 
@@ -85,8 +125,7 @@ pub async fn handle_text_message(
                     msg.chat.id, 
                     format!("✅ Добавлено {} задач:\n{}", 
                         added_count, 
-                        tasks.iter().enumerate()
-                            .take(added_count)
+                        valid_tasks.iter().enumerate()
                             .map(|(i, task)| format!("{}. {}", i + 1, task))
                             .collect::<Vec<_>>()
                             .join("\n")
@@ -95,7 +134,7 @@ pub async fn handle_text_message(
                 .reply_markup(create_todo_menu())
                 .await?;
             } else {
-                bot.send_message(msg.chat.id, "❌ Ошибка при добавлении задач")
+                bot.send_message(msg.chat.id, "❌ Ошибка при добавлении задач или все задачи содержат недопустимые символы")
                     .reply_markup(create_todo_menu())
                     .await?;
             }
@@ -105,20 +144,30 @@ pub async fn handle_text_message(
                 Ok(num) if num > 0 => {
                     let task_index = num - 1;
                     
-                    match storage.mark_task_completed(msg.chat.id, task_index).await {
-                        Ok(task_text) => {
-                            // Сброс состояния
-                            {
-                                let mut states = user_states.lock().await;
-                                states.insert(msg.chat.id, UserState::Default);
-                            }
+                    // Получаем список задач для валидации индекса
+                    let tasks = storage.get_tasks(msg.chat.id).await;
+                    match TaskIndexValidator::validate_task_index(task_index, tasks.len()) {
+                        ValidationResult::Valid => {
+                            match storage.mark_task_completed(msg.chat.id, task_index).await {
+                                Ok(task_text) => {
+                                    // Сброс состояния
+                                    {
+                                        let mut states = user_states.lock().await;
+                                        states.insert(msg.chat.id, UserState::Default);
+                                    }
 
-                            bot.send_message(msg.chat.id, format!("✅ Задача \"{}\" отмечена как выполненная!", task_text))
-                                .reply_markup(create_todo_menu())
-                                .await?;
+                                    bot.send_message(msg.chat.id, format!("✅ Задача \"{}\" отмечена как выполненная!", task_text))
+                                        .reply_markup(create_todo_menu())
+                                        .await?;
+                                }
+                                Err(_) => {
+                                    bot.send_message(msg.chat.id, "❌ Ошибка при обновлении задачи. Попробуйте еще раз:")
+                                        .await?;
+                                }
+                            }
                         }
-                        Err(_) => {
-                            bot.send_message(msg.chat.id, "❌ Задача с таким номером не найдена. Попробуйте еще раз:")
+                        ValidationResult::Invalid(error_msg) => {
+                            bot.send_message(msg.chat.id, format!("❌ {}", error_msg))
                                 .await?;
                         }
                     }
@@ -134,19 +183,29 @@ pub async fn handle_text_message(
                 Ok(num) if num > 0 => {
                     let task_index = num - 1;
                     
-                    match storage.remove_task(msg.chat.id, task_index).await {
-                        Ok(task_text) => {
-                            {
-                                let mut states = user_states.lock().await;
-                                states.insert(msg.chat.id, UserState::Default);
+                    // Получаем список задач для валидации индекса
+                    let tasks = storage.get_tasks(msg.chat.id).await;
+                    match TaskIndexValidator::validate_task_index(task_index, tasks.len()) {
+                        ValidationResult::Valid => {
+                            match storage.remove_task(msg.chat.id, task_index).await {
+                                Ok(task_text) => {
+                                    {
+                                        let mut states = user_states.lock().await;
+                                        states.insert(msg.chat.id, UserState::Default);
+                                    }
+                                    
+                                    bot.send_message(msg.chat.id, format!("🗑️ Задача \"{}\" удалена", task_text))
+                                        .reply_markup(create_todo_menu())
+                                        .await?;
+                                }
+                                Err(_) => {
+                                    bot.send_message(msg.chat.id, "❌ Ошибка при удалении задачи. Попробуйте еще раз:")
+                                        .await?;
+                                }
                             }
-                            
-                            bot.send_message(msg.chat.id, format!("🗑️ Задача \"{}\" удалена", task_text))
-                                .reply_markup(create_todo_menu())
-                                .await?;
                         }
-                        Err(_) => {
-                            bot.send_message(msg.chat.id, "❌ Задача с таким номером не найдена. Попробуйте еще раз:")
+                        ValidationResult::Invalid(error_msg) => {
+                            bot.send_message(msg.chat.id, format!("❌ {}", error_msg))
                                 .await?;
                         }
                     }
@@ -176,7 +235,7 @@ pub async fn handle_text_message(
 async fn handle_period_input(
     bot: Bot,
     chat_id: ChatId,
-    storage: JsonStorage,
+    storage: StorageType,
     user_states: UserStates,
     text: &str,
     counter_type: CounterType,
@@ -193,33 +252,36 @@ async fn handle_period_input(
     }
 
     let start_day: u32 = match parts[0].trim().parse() {
-        Ok(day) if day >= 1 && day <= 31 => day,
+        Ok(day) => day,
         _ => {
             bot.send_message(
                 chat_id,
-                "❌ Неверный день начала. Укажите число от 1 до 31."
+                "❌ Неверный формат дня начала. Укажите число от 1 до 31."
             ).await?;
             return Ok(());
         }
     };
 
     let end_day: u32 = match parts[1].trim().parse() {
-        Ok(day) if day >= 1 && day <= 31 => day,
+        Ok(day) => day,
         _ => {
             bot.send_message(
                 chat_id,
-                "❌ Неверный день окончания. Укажите число от 1 до 31."
+                "❌ Неверный формат дня окончания. Укажите число от 1 до 31."
             ).await?;
             return Ok(());
         }
     };
 
-    if start_day > end_day {
-        bot.send_message(
-            chat_id,
-            "❌ День начала не может быть больше дня окончания."
-        ).await?;
-        return Ok(());
+    // Валидация дней с использованием DayValidator
+    match DayValidator::validate_day_range(start_day, end_day) {
+        ValidationResult::Valid => {
+            // Продолжаем обработку
+        }
+        ValidationResult::Invalid(error_msg) => {
+            bot.send_message(chat_id, format!("❌ {}", error_msg)).await?;
+            return Ok(());
+        }
     }
 
     // Создаем напоминание

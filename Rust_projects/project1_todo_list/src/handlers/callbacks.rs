@@ -1,14 +1,14 @@
 use teloxide::prelude::*;
 
 use crate::models::{UserState, UserStates};
-use crate::storage::JsonStorage;
+use crate::storage::StorageType;
 use crate::utils::{create_main_menu, create_todo_menu, create_reminder_menu, create_counters_menu};
 use crate::models::CounterType;
 
 pub async fn handle_callback(
     bot: Bot,
     q: CallbackQuery,
-    storage: JsonStorage,
+    storage: StorageType,
     user_states: UserStates,
 ) -> ResponseResult<()> {
     if let Some(data) = &q.data {

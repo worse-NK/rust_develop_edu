@@ -1,7 +1,7 @@
 use teloxide::{prelude::*, utils::command::BotCommands};
 
 use crate::models::{UserState, UserStates};
-use crate::storage::JsonStorage;
+use crate::storage::StorageType;
 use crate::utils::{create_main_menu, create_todo_menu};
 
 #[derive(BotCommands, Clone)]
@@ -29,7 +29,7 @@ pub async fn handle_command(
     bot: Bot,
     msg: Message,
     command: Command,
-    storage: JsonStorage,
+    storage: StorageType,
     user_states: UserStates,
 ) -> ResponseResult<()> {
     // Сброс состояния пользователя при любой команде

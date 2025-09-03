@@ -1,5 +1,5 @@
 # Многоэтапная сборка для оптимизации размера образа
-FROM rust:1.82-slim as builder
+FROM rust:1.85-slim as builder
 
 # Устанавливаем системные зависимости
 RUN apt-get update && apt-get install -y \

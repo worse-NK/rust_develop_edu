@@ -9,7 +9,7 @@ mod reminder_system;
 
 use config::Config;
 use models::{create_user_states};
-use storage::JsonStorage;
+use storage::StorageType;
 use handlers::commands::Command;
 use reminder_system::ReminderSystem;
 
@@ -25,7 +25,7 @@ async fn main() {
     let _config = Config::from_env().expect("Failed to load configuration");
     
     let bot = Bot::from_env();
-    let storage = JsonStorage::new("data/todos.json");
+    let storage = StorageType::new().await.expect("Failed to initialize storage");
     let user_states = create_user_states();
 
     // Создаем папку для данных если её нет
